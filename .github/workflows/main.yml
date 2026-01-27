@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  build-void:
+    name: Build
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ['1.20', '1.21', '1.22', '1.23', '1.24']
+
+    container:
+      image: 'voidlinux/voidlinux:latest'
+
+    steps:
+      - name: Prepare container
+        run: |
+          # Redefine current main repo mirror
+          echo 'repository=https://repo-default.voidlinux.org/current' > /usr/share/xbps.d/00-repository-main.conf
+          # Update system xbps
+          xbps-install -Syu xbps
+          # Update system
+          xbps-install -Syu
+          # Install dependencies
+          #xbps-install -y git make gcc pam-devel libX11-devel
+          xbps-install -y git gcc pam-devel libX11-devel
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Git Safe Directory
+        run: git config --global --add safe.directory /__w/drako/drako
+
+      - name: Test without tags
+        run: go test
+
+      - name: Build without tags
+        run: go build
+
+      - name: Test install
+        run: go install
+
+      - name: Test uninstall
+        run: go uninstall
