@@ -44,12 +44,20 @@ func (m Model) viewDropdownMode() string {
 	layout := CalculateLayout(m.termWidth, m.termHeight, m.Config)
 	header := ""
 	if layout.ShowHeader {
-		header = renderHeaderArt(m.spinner.View())
+		headerCfg := HeaderConfig{
+			Enabled:  m.Config.HeaderCommandEnabled,
+			Command:  m.Config.HeaderCommand,
+			Args:     m.Config.HeaderCommandArgs,
+			Timeout:  time.Duration(m.Config.HeaderCommandTimeout) * time.Second,
+			Fallback: m.Config.HeaderFallback,
+			MaxLines: m.Config.HeaderCommandMaxLines,
+		}
+		header = RenderCommandHeader(headerCfg, m.spinner.View())
 	}
 	grid := m.renderGrid()
 	mainContent := lipgloss.JoinVertical(lipgloss.Center, header, grid)
 
-	helpText := "Dropdown Mode | ↑/↓/ws: Select, Enter: Execute, Esc/q: Cancel"
+	helpText := "Dropdown Mode | ←/→/ws: Select, Enter: Execute, Esc/q: Cancel"
 	help := helpStyle.Render(helpText)
 
 	// Adjust footer rendering for layout?
@@ -76,8 +84,8 @@ func (m Model) viewDropdownMode() string {
 		),
 	)
 	profileBar := m.renderProfileBar()
-	pathBar := m.path.RenderPathBar(false)
-	childDirs := m.path.RenderChildDirs(m.mode)
+	pathBar := m.path.RenderPathBar(false, m.zones)
+	childDirs := m.path.RenderChildDirs(m.mode, m.zones)
 
 	var footer string
 	if layout.ShowFooter {
@@ -129,7 +137,7 @@ func (m Model) renderDropdownPopup() string {
 	for i, item := range m.dropdownItems {
 		var line string
 		if i == m.dropdownSelectedIdx {
-			line = cursorSel.Render("► ") + textSel.Render(item.Name)
+			line = cursorSel.Render("▶ ") + textSel.Render(item.Name)
 		} else {
 			line = gap.Render("  ") + textNorm.Render(item.Name)
 		}
@@ -144,12 +152,12 @@ func (m Model) renderDropdownPopup() string {
 
 	// Right-pad each line with background-colored spaces to equal width
 	var lines []string
-	for _, line := range raw {
+	for i, line := range raw {
 		pad := maxW - lipgloss.Width(line)
 		if pad < 0 {
 			pad = 0
 		}
-		padded := line + bgFill.Render(strings.Repeat(" ", pad))
+		padded := m.markZone(dropdownZone(i), line+bgFill.Render(strings.Repeat(" ", pad)))
 		lines = append(lines, padded)
 	}
 
@@ -242,7 +250,15 @@ func (m Model) viewInfoMode() string {
 	layout := CalculateLayout(m.termWidth, m.termHeight, m.Config)
 	header := ""
 	if layout.ShowHeader {
-		header = renderHeaderArt(m.spinner.View())
+		headerCfg := HeaderConfig{
+			Enabled:  m.Config.HeaderCommandEnabled,
+			Command:  m.Config.HeaderCommand,
+			Args:     m.Config.HeaderCommandArgs,
+			Timeout:  time.Duration(m.Config.HeaderCommandTimeout) * time.Second,
+			Fallback: m.Config.HeaderFallback,
+			MaxLines: m.Config.HeaderCommandMaxLines,
+		}
+		header = RenderCommandHeader(headerCfg, m.spinner.View())
 	}
 
 	// Build info lines with same background rules to avoid black gaps

@@ -3,12 +3,21 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lucky7xz/drako/internal/config"
 )
 
 func (m Model) View() string {
+	out := m.buildView()
+	if m.zones != nil {
+		return m.zones.Scan(out)
+	}
+	return out
+}
+
+func (m Model) buildView() string {
 	if m.termWidth == 0 {
 		return "Initializing..."
 	}
@@ -38,20 +47,30 @@ func (m Model) View() string {
 
 	header := ""
 	if layout.ShowHeader {
-		header = renderHeaderArt(m.spinner.View())
+		headerCfg := HeaderConfig{
+			Enabled:  m.Config.HeaderCommandEnabled,
+			Command:  m.Config.HeaderCommand,
+			Args:     m.Config.HeaderCommandArgs,
+			Timeout:  time.Duration(m.Config.HeaderCommandTimeout) * time.Second,
+			Fallback: m.Config.HeaderFallback,
+			MaxLines: m.Config.HeaderCommandMaxLines,
+		}
+		header = RenderCommandHeader(headerCfg, m.spinner.View())
 	}
+
 	counter := m.renderProfileCounter()
+	profileButtons := m.renderProfileButtons()
 	grid := m.renderGrid()
-	mainContent := lipgloss.JoinVertical(lipgloss.Center, header, counter, grid)
+	mainContent := lipgloss.JoinVertical(lipgloss.Center, header, counter, profileButtons, grid)
 
 	var helpText string
 	switch m.mode {
 	case pathMode:
-		helpText = "Path Mode | ←/→/ad: Select, ↓/s: Children, Enter: cd, e: Search, q/Esc: Back"
-	case childMode:
-		helpText = "Child Mode | ↑/↓/ws: Select, Enter: cd, e: Search, q/Esc: Back"
+		helpText = "Path Mode | ←/→/ad: Select, ↑/s: Children, Enter: cd, e: Search, q/Esc: Back"
+	case pickerMode:
+		helpText = "Picker Mode | ←/→/ws: Select, Enter: cd, e: Search, q/Esc: Back"
 	default:
-		helpText = "Grid Mode | Enter: Select, e: Explain, Tab: Path, r: Start-Lock, i: Inventory"
+		helpText = "Grid Mode | Enter: Select, e: Explain, x: Edit, Tab: Path, r: Start-Lock, i: Inventory"
 	}
 	help := helpStyle.Render(helpText)
 
@@ -97,8 +116,8 @@ func (m Model) renderCombinedFooter(helpRendered string) string {
 		),
 	)
 	profileBar := m.renderProfileBar()
-	pathBar := m.path.RenderPathBar(m.mode == pathMode)
-	childDirs := m.path.RenderChildDirs(m.mode)
+	pathBar := m.path.RenderPathBar(m.mode == pathMode, m.zones)
+	childDirs := m.path.RenderChildDirs(m.mode, m.zones)
 
 	items := []string{}
 	if helpRendered != "" {

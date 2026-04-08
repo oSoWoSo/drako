@@ -3,12 +3,13 @@ package ui
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/lucky7xz/drako/internal/core"
 )
 
 func (m Model) updateGridMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -19,7 +20,7 @@ func (m Model) updateGridMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		targetIndex := num - 1 // Convert to 0-based index
 
 		if m.navigationTimer == nil { // This is the first number press (column selection)
-			lastCol := core.FindLastPopulatedCol(m.grid)
+			lastCol := len(m.grid[0]) - 1
 			targetCol := min(targetIndex, lastCol)
 
 			// Ensure the target column is valid before proceeding
@@ -27,12 +28,21 @@ func (m Model) updateGridMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			targetRow := core.FindFirstPopulatedRow(m.grid, targetCol)
-
 			m.cursorCol = targetCol
-			m.cursorRow = targetRow
+			// Snap Row to first populated in this column
+			m.cursorRow = 0
+			for r := 0; r < len(m.grid); r++ {
+				if strings.TrimSpace(m.grid[r][targetCol]) != "" {
+					m.cursorRow = r
+					break
+				}
+			}
 
-			m.navigationTimer = time.NewTimer(500 * time.Millisecond)
+			timeoutMs := m.Config.GridSelectionTimeoutMs
+			if timeoutMs <= 0 {
+				timeoutMs = 500
+			}
+			m.navigationTimer = time.NewTimer(time.Duration(timeoutMs) * time.Millisecond)
 
 			return m, func() tea.Msg {
 				<-m.navigationTimer.C
@@ -43,7 +53,7 @@ func (m Model) updateGridMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.navigationTimer.Stop()
 			m.navigationTimer = nil
 
-			lastRow := core.FindLastPopulatedRow(m.grid, m.cursorCol)
+			lastRow := len(m.grid) - 1
 			targetRow := min(targetIndex, lastRow)
 
 			m.cursorRow = targetRow
@@ -216,4 +226,172 @@ func (m *Model) moveCursor(rowDir, colDir int) {
 		m.cursorRow = bestRow
 		m.cursorCol = bestCol
 	}
+}
+func (m Model) resolveMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+
+	if m.mode == dropdownMode {
+		return m.resolveDropdownMouseClick(msg)
+	}
+
+	if m.mode == pathMode || m.mode == pickerMode {
+		return m.resolvePathMouseClick(msg)
+	}
+
+	if m.mode == inventoryMode {
+		return m.resolveInventoryMouseClick(msg)
+	}
+
+	if m.mode == infoMode {
+		m.mode = m.previousMode
+		m.activeDetail = nil
+		return m, nil
+	}
+
+	if m.zones == nil {
+		return m, nil
+	}
+
+	// Profile button zones
+	for i := range m.profiles {
+		if m.zones.Get(profileZone(i)).InBounds(msg) {
+			if updated, cmd, ok := m.switchToProfileIndex(i); ok {
+				return updated, cmd
+			}
+			return m, nil
+		}
+	}
+
+	// Grid cell zones
+	for r := range m.grid {
+		for c := range m.grid[r] {
+			if m.zones.Get(gridCellZone(r, c)).InBounds(msg) {
+				if c == m.cursorCol && r == m.cursorRow {
+					return m.updateGridMode(tea.KeyMsg{Type: tea.KeyEnter})
+				}
+				m.cursorCol = c
+				m.cursorRow = r
+				return m, nil
+			}
+		}
+	}
+
+	// Path component zones (enter path mode from grid)
+	for i := range m.path.PathComponents {
+		if m.zones.Get(pathComponentZone(i)).InBounds(msg) {
+			m.mode = pathMode
+			m.path.SelectedPathIndex = i
+			m.path.ListChildDirs()
+			return m, nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) resolveDropdownMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+
+	if m.zones == nil {
+		return m, nil
+	}
+
+	for i, item := range m.dropdownItems {
+		if m.zones.Get(dropdownZone(i)).InBounds(msg) {
+			m.Selected = item.Name
+			m.dropdownItems = nil
+			return m, tea.Quit
+		}
+	}
+
+	// Click outside the popup dismisses it
+	m.mode = gridMode
+	m.dropdownItems = nil
+	return m, nil
+}
+
+// resolvePathMouseClick handles mouse clicks in path mode and child mode
+func (m Model) resolvePathMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.zones == nil {
+		return m, nil
+	}
+
+	// Path component zones
+	for i := range m.path.PathComponents {
+		if m.zones.Get(pathComponentZone(i)).InBounds(msg) {
+			now := time.Now()
+			clickDelta := now.Sub(m.lastClickTime)
+			isDoubleClick := clickDelta < 500*time.Millisecond &&
+				msg.X == m.lastClickPos.x && msg.Y == m.lastClickPos.y
+			m.lastClickTime = now
+			m.lastClickPos.x = msg.X
+			m.lastClickPos.y = msg.Y
+
+			if m.mode == pathMode && isDoubleClick {
+				targetPath := m.path.BuildPathFromComponents(i)
+				if err := os.Chdir(targetPath); err == nil {
+					m.path.CurrentPath, _ = os.Getwd()
+					m.mode = gridMode
+					return m, func() tea.Msg { return pathChangedMsg{} }
+				}
+				m.mode = gridMode
+				return m, nil
+			}
+			m.path.SelectedPathIndex = i
+			m.path.ListChildDirs()
+			if m.mode != pathMode {
+				m.mode = pathMode
+			}
+			return m, nil
+		}
+	}
+
+	// Child directory zones
+	for i := range m.path.ChildDirs {
+		if m.zones.Get(pathChildZone(i)).InBounds(msg) {
+			now := time.Now()
+			clickDelta := now.Sub(m.lastClickTime)
+			isDoubleClick := clickDelta < 500*time.Millisecond &&
+				msg.X == m.lastClickPos.x && msg.Y == m.lastClickPos.y
+			m.lastClickTime = now
+			m.lastClickPos.x = msg.X
+			m.lastClickPos.y = msg.Y
+
+			if isDoubleClick {
+				parentPath := m.path.BuildPathFromComponents(m.path.SelectedPathIndex)
+				targetPath := filepath.Join(parentPath, m.path.ChildDirs[i])
+				if err := os.Chdir(targetPath); err == nil {
+					m.path.CurrentPath, _ = os.Getwd()
+					m.path.UpdatePathComponents()
+					m.path.ListChildDirs()
+					m.path.SelectedChildIndex = 0
+					m.mode = gridMode
+					return m, func() tea.Msg { return pathChangedMsg{} }
+				}
+			}
+
+			m.path.SelectedChildIndex = i
+			if m.mode == pathMode {
+				m.mode = pickerMode
+			}
+			return m, nil
+		}
+	}
+
+	// Click outside known zones while in path/picker — return to grid
+	m.mode = gridMode
+	return m, nil
+}
+
+// ChangeDir is a helper to change directory and update path model
+func (pm *PathModel) ChangeDir(targetPath string) error {
+	if err := os.Chdir(targetPath); err != nil {
+		return err
+	}
+	pm.CurrentPath, _ = os.Getwd()
+	return nil
 }

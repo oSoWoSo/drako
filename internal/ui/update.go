@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +20,8 @@ func (m Model) Init() tea.Cmd {
 	configDir, _ := config.GetConfigDir()
 	return tea.Batch(
 		tea.EnterAltScreen,
+		tea.EnableMouseCellMotion,
+		tea.EnableMouseAllMotion,
 		checkNetworkStatusCmd(),
 		m.spinner.Tick,
 		WatchConfigCmd(configDir),
@@ -84,6 +88,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingProfileErrors = append(m.pendingProfileErrors, bundle.Broken...)
 			m.profileErrorQueueActive = true
 			m = m.presentNextBrokenProfile()
+		} else {
+			// Recovery: if everything is fixed, return to grid mode
+			m.mode = gridMode
+			m.activeDetail = nil
+			m.profileErrorQueueActive = false
+			m.acknowledgedErrors = make(map[string]bool)
 		}
 		// Restart the watcher for the next change
 		configDir, _ := config.GetConfigDir()
@@ -97,6 +107,96 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+
+	case tea.MouseMsg:
+		// Swipe gesture: track press start, fire profile cycle on horizontal release/motion.
+		if msg.Action == tea.MouseActionPress {
+			m.swipeActive = true
+			m.swipeStartX = msg.X
+			m.swipeStartY = msg.Y
+		} else if m.swipeActive && (msg.Action == tea.MouseActionRelease || msg.Action == tea.MouseActionMotion) {
+			deltaX := msg.X - m.swipeStartX
+			deltaY := msg.Y - m.swipeStartY
+			if deltaY < 0 {
+				deltaY = -deltaY
+			}
+			if deltaX < 0 {
+				deltaX = -deltaX
+			}
+			const swipeThreshold = 10
+			if deltaX >= swipeThreshold && deltaX > deltaY {
+				m.swipeActive = false
+				if (m.mode == gridMode || m.mode == pickerMode) && len(m.profiles) > 1 {
+					if msg.X > m.swipeStartX {
+						return m.handleProfileCycle(1)
+					}
+					return m.handleProfileCycle(-1)
+				}
+			}
+			if msg.Action == tea.MouseActionRelease {
+				m.swipeActive = false
+			}
+		}
+
+		if m.mode == dropdownMode {
+			if msg.Type == tea.MouseWheelUp {
+				if m.dropdownSelectedIdx > 0 {
+					m.dropdownSelectedIdx--
+				}
+				return m, nil
+			}
+			if msg.Type == tea.MouseWheelDown {
+				if m.dropdownSelectedIdx < len(m.dropdownItems)-1 {
+					m.dropdownSelectedIdx++
+				}
+				return m, nil
+			}
+		}
+
+		// Handle scroll wheel in path/child mode for directory scrolling
+		if m.mode == pathMode || m.mode == pickerMode {
+			if msg.Type == tea.MouseWheelUp {
+				// Scroll up through directories
+				if m.path.SelectedChildIndex > 0 {
+					m.path.SelectedChildIndex--
+				} else if m.mode == pickerMode {
+					// In child mode, wheel up goes back to path mode
+					m.mode = pathMode
+				}
+				return m, nil
+			}
+			if msg.Type == tea.MouseWheelDown {
+				// Scroll down through directories
+				// In pathMode, first scroll should enter pickerMode (like Down arrow key)
+				if m.mode == pathMode && len(m.path.ChildDirs) > 0 {
+					m.path.SelectedChildIndex = 0
+					m.mode = pickerMode
+					return m, nil
+				}
+				// In pickerMode, continue scrolling
+				if m.path.SelectedChildIndex < len(m.path.ChildDirs)-1 {
+					m.path.SelectedChildIndex++
+				}
+				return m, nil
+			}
+		}
+
+		// In grid mode, scroll down enters path mode
+		if m.mode == gridMode && msg.Type == tea.MouseWheelDown {
+			m.mode = pathMode
+			// Initialize path components in case they aren't set
+			if len(m.path.PathComponents) == 0 {
+				m.path.UpdatePathComponents()
+			}
+			m.path.ListChildDirs()
+			return m, nil
+		}
+
+		if m.mode == gridMode || m.mode == pathMode || m.mode == pickerMode || m.mode == dropdownMode {
+			return m.resolveMouseClick(msg)
+		}
+		return m, nil
+
 
 	case tea.KeyMsg:
 		key := msg.String()
@@ -118,6 +218,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateLockedMode(msg)
 		}
 
+		// When actively typing in the path/picker filter, bypass all global hotkeys
+		// so that letters like 'o', 'p', 'r' are not misinterpreted as commands.
+		if m.path.Searching && (m.mode == pathMode || m.mode == pickerMode) {
+			switch m.mode {
+			case pathMode:
+				mode, cmd := m.path.UpdatePathMode(msg, m.Config)
+				m.mode = mode
+				return m, cmd
+			case pickerMode:
+				mode, cmd := m.path.UpdatePickerMode(msg, m.Config)
+				m.mode = mode
+				return m, cmd
+			}
+		}
+
 		// 1. Centralized Glassroot "Gatekeeper"
 		// Intercept restricted actions (Lock, Inventory, Path) early.
 		if m.GlassrootMode {
@@ -134,7 +249,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Profile switching with configurable modifier + Number or ~ (Shift + `)
-		if m.mode == gridMode || m.mode == childMode {
+		if m.mode == gridMode || m.mode == pickerMode {
 			if ok, target := IsProfileSwitch(m.Config.Keys, msg, m.Config.NumbModifier); ok {
 				if target < len(m.profiles) {
 					if updated, cmd, ok := m.switchToProfileIndex(target); ok {
@@ -150,6 +265,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if IsProfileNext(m.Config.Keys, msg) {
 				return m.handleProfileCycle(1)
 			}
+			if IsEditProfile(m.Config.Keys, msg) {
+				return m.editProfileInEditor()
+			}
 		}
 		switch m.mode {
 		case gridMode:
@@ -158,8 +276,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mode, cmd := m.path.UpdatePathMode(msg, m.Config)
 			m.mode = mode
 			return m, cmd
-		case childMode:
-			mode, cmd := m.path.UpdateChildMode(msg, m.Config)
+		case pickerMode:
+			mode, cmd := m.path.UpdatePickerMode(msg, m.Config)
 			m.mode = mode
 			return m, cmd
 		case inventoryMode:
@@ -463,6 +581,27 @@ func (m Model) switchToProfileIndex(target int) (Model, tea.Cmd, bool) {
 	updated.Config = config.ApplyProfileOverlay(m.baseConfig, selected.Profile)
 	updated.applyConfig(updated.Config)
 
+	// Change working directory if profile has working_directory set
+	if updated.Config.WorkingDirectory != nil && strings.TrimSpace(*updated.Config.WorkingDirectory) != "" {
+		targetDir := *updated.Config.WorkingDirectory
+		// Expand user home directory if needed
+		if strings.HasPrefix(targetDir, "~") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				targetDir = filepath.Join(home, strings.TrimPrefix(targetDir, "~"))
+			}
+		}
+		if err := os.Chdir(targetDir); err != nil {
+			log.Printf("warning: could not change to working directory %s: %v", targetDir, err)
+		} else {
+			log.Printf("changed working directory to: %s", targetDir)
+			// Update path model to reflect new working directory
+			updated.path.CurrentPath, _ = os.Getwd()
+			updated.path.UpdatePathComponents()
+			updated.path.ListChildDirs()
+		}
+	}
+
 	return updated, nil, true
 }
 
@@ -483,5 +622,53 @@ func (m Model) handleProfileCycle(direction int) (tea.Model, tea.Cmd) {
 			return nextModel, cmd
 		}
 	}
+	return m, nil
+}
+
+func (m Model) editProfileInEditor() (tea.Model, tea.Cmd) {
+	if len(m.profiles) == 0 {
+		return m, nil
+	}
+
+	profilePath := m.profiles[m.activeProfileIndex].Path
+
+	editors := []string{}
+	if e := os.Getenv("EDITOR"); e != "" {
+		editors = append(editors, strings.Fields(e)...)
+	}
+	if v := os.Getenv("VISUAL"); v != "" {
+		editors = append(editors, strings.Fields(v)...)
+	}
+	editors = append(editors, "code", "cursor", "hx", "nano", "vim")
+
+	var chosen string
+	for _, ed := range editors {
+		ed = strings.TrimSpace(ed)
+		if ed == "" {
+			continue
+		}
+		if _, err := exec.LookPath(ed); err == nil {
+			chosen = ed
+			break
+		}
+	}
+
+	if chosen == "" {
+		log.Printf("No editor found in PATH (tried: %v)", editors)
+		return m, nil
+	}
+
+	cmd := exec.Command(chosen, profilePath)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to open editor %s: %v", chosen, err)
+		return m, nil
+	}
+
+	log.Printf("Opened profile %s in editor: %s", m.profiles[m.activeProfileIndex].Name, chosen)
 	return m, nil
 }

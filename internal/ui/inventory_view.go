@@ -46,17 +46,17 @@ func (m Model) viewInventoryMode() string {
 	s.WriteString("\n\n")
 
 	// Render Apply Button
-	applyButton := buttonStyle.Render("[ Apply Changes ]")
+	applyButton := m.markZone(inventoryListZone(2), buttonStyle.Render("[ Apply Changes ]"))
 	if m.inventory.focusedList == 2 {
-		applyButton = selectedButtonStyle.Render("[ Apply Changes ]")
+		applyButton = m.markZone(inventoryListZone(2), selectedButtonStyle.Render("[ Apply Changes ]"))
 	}
 	s.WriteString(applyButton)
 
 	// Render Rescue Mode Button
 	s.WriteString("\n\n")
-	rescueButton := rescueButtonStyle.Render("[ Rescue Mode ]")
+	rescueButton := m.markZone(inventoryListZone(3), rescueButtonStyle.Render("[ Rescue Mode ]"))
 	if m.inventory.focusedList == 3 {
-		rescueButton = selectedRescueButtonStyle.Render("[ Rescue Mode ]")
+		rescueButton = m.markZone(inventoryListZone(3), selectedRescueButtonStyle.Render("[ Rescue Mode ]"))
 	}
 	s.WriteString(rescueButton)
 
@@ -100,14 +100,14 @@ func (m Model) renderInventoryGrid(profiles []string, listID int) string {
 		if isFocused {
 			style = selectedCellStyle
 		}
-		cells = append(cells, style.Render(" (empty) "))
+		cells = append(cells, m.markZone(inventoryItemZone(listID, 0), style.Render(" (empty) ")))
 	} else {
 		for i, p := range profiles {
 			style := cellStyle
 			if isFocused && i == m.inventory.cursor {
 				style = selectedCellStyle
 			}
-			cells = append(cells, style.Render(p))
+			cells = append(cells, m.markZone(inventoryItemZone(listID, i), style.Render(p)))
 		}
 	}
 

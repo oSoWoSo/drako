@@ -161,6 +161,10 @@ func (c *Config) ApplyDefaults() {
 		c.Theme = defaults.Theme
 	}
 
+	if c.GridSelectionTimeoutMs <= 0 {
+		c.GridSelectionTimeoutMs = 500
+	}
+
 	if c.AutoLockEnabled == nil {
 		enabled := true
 		c.AutoLockEnabled = &enabled
@@ -184,6 +188,11 @@ func (c *Config) ApplyDefaults() {
 	}
 	if strings.TrimSpace(c.Keys.ProfileNext) == "" {
 		c.Keys.ProfileNext = defaults.Keys.ProfileNext
+	}
+
+	// Header command defaults
+	if c.HeaderCommandTimeout == 0 {
+		c.HeaderCommandTimeout = 2
 	}
 
 	// Ensure limits are respected
@@ -218,16 +227,24 @@ func ValidateConfig(cfg Config) error {
 			return fmt.Errorf("command %q has invalid column %q: %v", cmd.Name, cmd.Col, err)
 		}
 
-		// Handle special -1 values (meaning last row/col)
-		if row == -1 {
+		// Row standard 1-9 check
+		if row != -1 {
+			if row < 1 || row > 9 {
+				return fmt.Errorf("command %q has invalid row %d: must be 1-9 (or -1 for last)", cmd.Name, row)
+			}
+			// Map to 0-based index for bounds checking
+			row = row - 1
+		} else {
+			// Handle special -1 value (meaning last row)
 			row = cfg.Y - 1
 		}
+
 		if col == -1 {
 			col = cfg.X - 1
 		}
 
 		if row >= cfg.Y {
-			return fmt.Errorf("command %q at row %d exceeds grid height %d", cmd.Name, row, cfg.Y)
+			return fmt.Errorf("command %q at row %d exceeds grid height %d", cmd.Name, cmd.Row, cfg.Y)
 		}
 		if col >= cfg.X {
 			return fmt.Errorf("command %q at column %q exceeds grid width %d", cmd.Name, cmd.Col, cfg.X)
@@ -252,7 +269,10 @@ func BuildGrid(config Config) [][]string {
 
 		if row == -1 {
 			row = config.Y - 1
+		} else {
+			row = row - 1 // 1-based to 0-based
 		}
+
 		if col == -1 {
 			col = config.X - 1
 		}
@@ -380,8 +400,28 @@ func ApplyProfileOverlay(base Config, profile ProfileFile) Config {
 	if profile.Shell != nil {
 		cfg.DefaultShell = *profile.Shell
 	}
+	if profile.WorkingDirectory != nil {
+		cfg.WorkingDirectory = profile.WorkingDirectory
+	}
 	// Commands are mandatory in ProfileFile basically
 	cfg.Commands = CopyCommands(profile.Commands)
+
+	// Header command overlay
+	if profile.HeaderCommandEnabled != nil {
+		cfg.HeaderCommandEnabled = *profile.HeaderCommandEnabled
+	}
+	if profile.HeaderCommand != nil {
+		cfg.HeaderCommand = *profile.HeaderCommand
+	}
+	if len(profile.HeaderCommandArgs) > 0 {
+		cfg.HeaderCommandArgs = profile.HeaderCommandArgs
+	}
+	if profile.HeaderCommandTimeout != nil {
+		cfg.HeaderCommandTimeout = *profile.HeaderCommandTimeout
+	}
+	if profile.HeaderFallback != nil {
+		cfg.HeaderFallback = *profile.HeaderFallback
+	}
 
 	return cfg
 }
@@ -541,16 +581,24 @@ func LoadConfig(profileOverride *string) ConfigBundle {
 			} else {
 				// Convert Settings to Base Config (Commands are empty)
 				base = Config{
-					DefaultShell:       settings.DefaultShell,
-					NumbModifier:       settings.NumbModifier,
-					Profile:            settings.Profile,
-					LockTimeoutMinutes: settings.LockTimeoutMinutes,
-					AutoLockEnabled:    settings.AutoLockEnabled,
-					EnvWhitelist:       settings.EnvWhitelist,
-					EnvBlocklist:       settings.EnvBlocklist,
-					Theme:              settings.Theme,
-					Keys:               settings.Keys,
-					Commands:           []Command{}, // Explicitly empty
+					DefaultShell:           settings.DefaultShell,
+					NumbModifier:           settings.NumbModifier,
+					Profile:                settings.Profile,
+					WorkingDirectory:       settings.WorkingDirectory,
+					LockTimeoutMinutes:     settings.LockTimeoutMinutes,
+					AutoLockEnabled:        settings.AutoLockEnabled,
+					EnvWhitelist:           settings.EnvWhitelist,
+					EnvBlocklist:           settings.EnvBlocklist,
+					Theme:                  settings.Theme,
+					Keys:                   settings.Keys,
+					GridSelectionTimeoutMs: settings.GridSelectionTimeoutMs,
+					Commands:               []Command{}, // Explicitly empty
+					HeaderCommandEnabled:   settings.HeaderCommandEnabled,
+					HeaderCommand:          settings.HeaderCommand,
+					HeaderCommandArgs:      settings.HeaderCommandArgs,
+					HeaderCommandTimeout:   settings.HeaderCommandTimeout,
+					HeaderFallback:         settings.HeaderFallback,
+					HeaderCommandMaxLines:  settings.HeaderCommandMaxLines,
 				}
 				log.Printf("Loaded base settings")
 				if settings.LockTimeoutMinutes != nil {
@@ -722,14 +770,22 @@ func LoadConfig(profileOverride *string) ConfigBundle {
 
 	return ConfigBundle{
 		Settings: AppSettings{
-			DefaultShell:       base.DefaultShell,
-			NumbModifier:       base.NumbModifier,
-			Profile:            base.Profile,
-			LockTimeoutMinutes: base.LockTimeoutMinutes,
-			EnvWhitelist:       base.EnvWhitelist,
-			EnvBlocklist:       base.EnvBlocklist,
-			Theme:              base.Theme,
-			Keys:               base.Keys,
+			DefaultShell:           base.DefaultShell,
+			NumbModifier:           base.NumbModifier,
+			Profile:                base.Profile,
+			WorkingDirectory:       base.WorkingDirectory,
+			LockTimeoutMinutes:     base.LockTimeoutMinutes,
+			EnvWhitelist:           base.EnvWhitelist,
+			EnvBlocklist:           base.EnvBlocklist,
+			Theme:                  base.Theme,
+			Keys:                   base.Keys,
+			GridSelectionTimeoutMs: base.GridSelectionTimeoutMs,
+			HeaderCommandEnabled:   base.HeaderCommandEnabled,
+			HeaderCommand:          base.HeaderCommand,
+			HeaderCommandArgs:      base.HeaderCommandArgs,
+			HeaderCommandTimeout:   base.HeaderCommandTimeout,
+			HeaderFallback:         base.HeaderFallback,
+			HeaderCommandMaxLines:  base.HeaderCommandMaxLines,
 		},
 		Base:        base,
 		Config:      effective,

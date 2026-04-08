@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/lucky7xz/drako/internal/config"
 )
 
@@ -83,8 +84,22 @@ func (m *PathModel) ListChildDirs() {
 		if m.Filter != "" && !strings.Contains(strings.ToLower(name), strings.ToLower(m.Filter)) {
 			continue
 		}
-		if f.IsDir() {
-			m.ChildDirs = append(m.ChildDirs, name)
+		// Check if it's a directory OR a symlink to a directory
+		info, err := os.Stat(filepath.Join(path, name))
+		if err == nil {
+			if info.IsDir() {
+				m.ChildDirs = append(m.ChildDirs, name)
+			}
+		} else {
+			// If stat fails, try lstat to check symlink
+			linkInfo, linkErr := os.Lstat(filepath.Join(path, name))
+			if linkErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
+				// It's a symlink, check if target is a directory
+				targetInfo, targetErr := os.Stat(filepath.Join(path, name))
+				if targetErr == nil && targetInfo.IsDir() {
+					m.ChildDirs = append(m.ChildDirs, name)
+				}
+			}
 		}
 	}
 	sort.Strings(m.ChildDirs)
@@ -156,7 +171,7 @@ func (pm *PathModel) UpdatePathMode(msg tea.KeyMsg, cfg config.Config) (navMode,
 		case tea.KeyDown:
 			if len(pm.ChildDirs) > 0 {
 				pm.SelectedChildIndex = 0
-				return childMode, nil
+				return pickerMode, nil
 			}
 		}
 		return pathMode, nil
@@ -165,7 +180,7 @@ func (pm *PathModel) UpdatePathMode(msg tea.KeyMsg, cfg config.Config) (navMode,
 	switch {
 	case msg.String() == "q" || msg.String() == "esc":
 		return gridMode, nil // Return to grid mode (no brainer improvement)
-	case msg.String() == "e":
+	case msg.String() == "e" || msg.String() == "/":
 		pm.Searching = true
 		pm.Filter = ""
 		pm.ListChildDirs() // Refresh logic just in case
@@ -174,6 +189,15 @@ func (pm *PathModel) UpdatePathMode(msg tea.KeyMsg, cfg config.Config) (navMode,
 		if pm.SelectedPathIndex > 0 {
 			pm.SelectedPathIndex--
 			pm.ListChildDirs()
+		} else {
+			// Already at root-most visible part?
+			// Navigate to ".." (Parent of CurrentPath) if possible
+			parent := filepath.Dir(pm.CurrentPath)
+			if parent != pm.CurrentPath {
+				pm.CurrentPath = parent
+				pm.UpdatePathComponents()
+				pm.ListChildDirs()
+			}
 		}
 	case IsRight(cfg.Keys, msg):
 		if pm.SelectedPathIndex < len(pm.PathComponents)-1 {
@@ -183,7 +207,7 @@ func (pm *PathModel) UpdatePathMode(msg tea.KeyMsg, cfg config.Config) (navMode,
 	case IsDown(cfg.Keys, msg):
 		if len(pm.ChildDirs) > 0 {
 			pm.SelectedChildIndex = 0
-			return childMode, nil
+			return pickerMode, nil
 		}
 	case IsPathGridMode(cfg.Keys, msg):
 		return gridMode, nil
@@ -207,8 +231,8 @@ func (pm *PathModel) UpdatePathMode(msg tea.KeyMsg, cfg config.Config) (navMode,
 	return pathMode, nil
 }
 
-// Update handles key events when in ChildMode
-func (pm *PathModel) UpdateChildMode(msg tea.KeyMsg, cfg config.Config) (navMode, tea.Cmd) {
+// Update handles key events when in PickerMode
+func (pm *PathModel) UpdatePickerMode(msg tea.KeyMsg, cfg config.Config) (navMode, tea.Cmd) {
 	if pm.Searching {
 		switch key := msg.String(); key {
 		case "esc":
@@ -251,13 +275,13 @@ func (pm *PathModel) UpdateChildMode(msg tea.KeyMsg, cfg config.Config) (navMode
 				pm.SelectedChildIndex++
 			}
 		}
-		return childMode, nil
+		return pickerMode, nil
 	}
 
 	switch {
 	case msg.String() == "q" || msg.String() == "esc":
 		return gridMode, nil // Return to grid mode
-	case msg.String() == "e":
+	case msg.String() == "e" || msg.String() == "/":
 		pm.Searching = true
 		pm.Filter = ""
 		pm.ListChildDirs()
@@ -271,6 +295,32 @@ func (pm *PathModel) UpdateChildMode(msg tea.KeyMsg, cfg config.Config) (navMode
 		if pm.SelectedChildIndex < len(pm.ChildDirs)-1 {
 			pm.SelectedChildIndex++
 		}
+	case IsRight(cfg.Keys, msg):
+		// Enter directory
+		if len(pm.ChildDirs) > 0 {
+			parentPath := pm.BuildPathFromComponents(pm.SelectedPathIndex)
+			targetPath := filepath.Join(parentPath, pm.ChildDirs[pm.SelectedChildIndex])
+			if err := os.Chdir(targetPath); err == nil {
+				pm.CurrentPath, _ = os.Getwd()
+				pm.UpdatePathComponents()
+				pm.ListChildDirs()
+				pm.SelectedChildIndex = 0
+				return pickerMode, nil
+			}
+		}
+	case IsLeft(cfg.Keys, msg):
+		// Go to Parent
+		parent := filepath.Dir(pm.CurrentPath)
+		if parent != pm.CurrentPath {
+			if err := os.Chdir(parent); err == nil {
+				pm.CurrentPath, _ = os.Getwd()
+				pm.UpdatePathComponents()
+				pm.ListChildDirs()
+				pm.SelectedChildIndex = 0
+				return pickerMode, nil
+			}
+		}
+		return pathMode, nil
 	case IsPathGridMode(cfg.Keys, msg):
 		return gridMode, nil
 	case IsConfirm(cfg.Keys, msg):
@@ -290,10 +340,10 @@ func (pm *PathModel) UpdateChildMode(msg tea.KeyMsg, cfg config.Config) (navMode
 			pm.SelectedChildIndex = len(pm.ChildDirs) - 1
 		}
 	}
-	return childMode, nil
+	return pickerMode, nil
 }
 
-func (pm *PathModel) RenderPathBar(active bool) string {
+func (pm *PathModel) RenderPathBar(active bool, zones *zone.Manager) string {
 	var renderedParts []string
 	for i, component := range pm.PathComponents {
 		var style lipgloss.Style
@@ -302,15 +352,19 @@ func (pm *PathModel) RenderPathBar(active bool) string {
 		} else {
 			style = pathStyle
 		}
-		renderedParts = append(renderedParts, style.Render(component))
+		part := style.Render(component)
+		if zones != nil {
+			part = zones.Mark(pathComponentZone(i), part)
+		}
+		renderedParts = append(renderedParts, part)
 	}
 
 	separator := pathSeparatorStyle.Render("/")
 	return statusBarStyle.Render(lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(renderedParts, separator)))
 }
 
-func (pm *PathModel) RenderChildDirs(mode navMode) string {
-	if mode != childMode && mode != pathMode {
+func (pm *PathModel) RenderChildDirs(mode navMode, zones *zone.Manager) string {
+	if mode != pickerMode && mode != pathMode {
 		return ""
 	}
 	var content string
@@ -326,16 +380,21 @@ func (pm *PathModel) RenderChildDirs(mode navMode) string {
 	} else {
 		var rows []string
 		for i, dir := range pm.ChildDirs {
-			if mode == childMode && i == pm.SelectedChildIndex {
-				rows = append(rows, selectedChildDirStyle.Render("› "+dir))
+			var row string
+			if mode == pickerMode && i == pm.SelectedChildIndex {
+				row = selectedChildDirStyle.Render("› " + dir)
 			} else {
-				rows = append(rows, childDirStyle.Render("  "+dir))
+				row = childDirStyle.Render("  " + dir)
 			}
+			if zones != nil {
+				row = zones.Mark(pathChildZone(i), row)
+			}
+			rows = append(rows, row)
 		}
 
 		maxVisible := 5
 		start := 0
-		if mode == childMode && pm.SelectedChildIndex >= maxVisible {
+		if mode == pickerMode && pm.SelectedChildIndex >= maxVisible {
 			start = pm.SelectedChildIndex - maxVisible + 1
 		}
 		end := start + maxVisible

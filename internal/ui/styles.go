@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,23 +11,22 @@ import (
 // Styling lives in one place so colors and layout tweaks are easy to reason about.
 
 var (
-	appStyle = lipgloss.NewStyle().
-			Margin(1, 2)
+	appStyle = lipgloss.NewStyle()
 
 	headerArt = `
 ╭───────────────────────────────╮
 │   //┏━ ┓z       ┏━ ┓\\:...    │
 │  ┏━━┫  ╋━━━┳━━━━╋  ┣━┓━━━━━┓  │
-│  ┃  ✘  ┃ ┏━┫ ━━ ┃   ◄┃  %s  ┃  │
+│  ┃  ✘  ┃ ┏━┫ ━━ ┃   ◄┃  drako ┃  │
 │  ┗━━━━━┻━┛ ┗━╱╲━┻━━┻━┻━━━━━┛  │
 ◄═══════════════════════════════► 
      ◄═════[  啸龙志  ]═════►      
 ╰───────────────────────────────╯
 `
 
-	activeHeaderArt = ""
-
 	headerStyle               lipgloss.Style
+	profileButtonStyle        lipgloss.Style
+	activeProfileButtonStyle  lipgloss.Style
 	helpStyle                 lipgloss.Style
 	statusBarStyle            lipgloss.Style
 	onlineStyle               lipgloss.Style
@@ -59,23 +57,27 @@ var (
 	whiteStyle                lipgloss.Style
 	footerStyle               lipgloss.Style
 	dropdownPopupStyle        lipgloss.Style
+	inactiveHeaderStyle       lipgloss.Style
+
+	activeHeaderArt string
 )
 
 func applyThemeStyles(cfg config.Config) {
 	theme := config.GetTheme(cfg.Theme)
 	ui := config.MapThemeToUI(theme)
 
-	if cfg.HeaderArt != nil && strings.TrimSpace(*cfg.HeaderArt) != "" {
-		activeHeaderArt = *cfg.HeaderArt
-		log.Printf("Using custom header art from config")
-	} else {
-		activeHeaderArt = headerArt
-		log.Printf("Using default header art")
-	}
-
 	headerStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ui.HeaderFG)).
 		PaddingBottom(1).
+		Bold(true)
+
+	profileButtonStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ui.HelpFG)).
+		Bold(true)
+
+	activeProfileButtonStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ui.ButtonSelFG)).
+		Background(lipgloss.Color(ui.ButtonSelBG)).
 		Bold(true)
 
 	helpStyle = lipgloss.NewStyle().
@@ -155,7 +157,10 @@ func applyThemeStyles(cfg config.Config) {
 	titleStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(ui.TitleFG)).
 		Bold(true).
-		Bold(true).
+		Padding(0, 1)
+
+	inactiveHeaderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(ui.HelpFG)).
 		Padding(0, 1)
 
 	inventoryTitleStyle = lipgloss.NewStyle().
@@ -234,14 +239,19 @@ func applyThemeStyles(cfg config.Config) {
 		Padding(1, 2).
 		Margin(1).
 		Bold(true)
+
+	if cfg.HeaderArt != nil && strings.TrimSpace(*cfg.HeaderArt) != "" {
+		activeHeaderArt = *cfg.HeaderArt
+	} else {
+		activeHeaderArt = headerArt
+	}
 }
 
-// renderHeaderArt renders the header with x and Chinese characters in white
+// renderHeaderArt renders the configurable header art with styled characters
 func renderHeaderArt(spinnerView string) string {
 	var formattedArt string
 	placeholder := "SPINNERPLACEHOLDER"
 
-	// Only inject the spinner if the template asks for it
 	if strings.Contains(activeHeaderArt, "%s") {
 		formattedArt = fmt.Sprintf(activeHeaderArt, placeholder)
 	} else {
@@ -250,7 +260,6 @@ func renderHeaderArt(spinnerView string) string {
 
 	lines := strings.Split(formattedArt, "\n")
 
-	// Get the primary color from headerStyle
 	primaryStyle := lipgloss.NewStyle().
 		Foreground(headerStyle.GetForeground()).
 		Bold(true)
@@ -262,21 +271,16 @@ func renderHeaderArt(spinnerView string) string {
 			continue
 		}
 
-		// Check if this line contains the spinner placeholder
 		if strings.Contains(line, placeholder) {
-			// Process the line in parts: before placeholder, placeholder, after placeholder
 			parts := strings.Split(line, placeholder)
 			var styledLine strings.Builder
 
-			// Process part before spinner
 			if len(parts) > 0 {
 				styledLine.WriteString(styleLineSegment(parts[0], primaryStyle))
 			}
 
-			// Add white-styled spinner
 			styledLine.WriteString(whiteStyle.Render(spinnerView))
 
-			// Process part after spinner
 			if len(parts) > 1 {
 				styledLine.WriteString(styleLineSegment(parts[1], primaryStyle))
 			}
@@ -285,61 +289,51 @@ func renderHeaderArt(spinnerView string) string {
 			continue
 		}
 
-		// Regular line without spinner
 		styledLines = append(styledLines, styleLineSegment(line, primaryStyle))
 	}
 
-	// Apply only padding, not color
 	result := strings.Join(styledLines, "\n")
 	return lipgloss.NewStyle().PaddingBottom(1).Render(result)
 }
 
-// styleLineSegment applies styling to a line segment, with X and Chinese chars in white
+// styleLineSegment applies styling to a line segment, with special chars in white
 func styleLineSegment(segment string, primaryStyle lipgloss.Style) string {
 	var styledLine strings.Builder
 	runes := []rune(segment)
 	for i := 0; i < len(runes); i++ {
-		// Check for 'X'
 		if runes[i] == '✘' {
 			styledLine.WriteString(whiteStyle.Render("✘"))
 			continue
 		}
 
-		// Check for "╱╲"
 		if i+1 < len(runes) && string(runes[i:i+2]) == "╱╲" {
 			styledLine.WriteString(whiteStyle.Render("╱╲"))
-			i++ // Skip next char (loop will increment by 1)
+			i++
 			continue
 		}
 
-		// Check for "◄"
 		if i+1 < len(runes) && runes[i] == '◄' {
 			styledLine.WriteString(whiteStyle.Render("◄"))
 			continue
 		}
 
-		// Check for "►"
 		if i+1 < len(runes) && runes[i] == '►' {
 			styledLine.WriteString(whiteStyle.Render("►"))
 			continue
 		}
 
-		// Check for "◄═══════════════════════════════►"
-		pattern := "◄═══════════════════════════════►"
-		if i+len([]rune(pattern))-1 < len(runes) && string(runes[i:i+len([]rune(pattern))]) == pattern {
-			styledLine.WriteString(whiteStyle.Render(pattern))
-			i += len([]rune(pattern)) - 1 // Skip the matched runes
+		if i+1 < len(runes) && string(runes[i:i+2]) == "◄═" {
+			styledLine.WriteString(whiteStyle.Render(string(runes[i : i+2])))
+			i++
 			continue
 		}
 
-		// Check for Chinese characters "啸龙志"
 		if i+2 < len(runes) && string(runes[i:i+3]) == "啸龙志" {
 			styledLine.WriteString(whiteStyle.Render("啸龙志"))
-			i += 2 // Skip next 2 chars (loop will increment by 1)
+			i += 2
 			continue
 		}
 
-		// Regular character with primary color
 		styledLine.WriteString(primaryStyle.Render(string(runes[i])))
 	}
 	return styledLine.String()

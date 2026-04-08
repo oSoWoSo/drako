@@ -172,6 +172,73 @@ func Contains(slice []string, item string) bool {
 	return false
 }
 
+func (m Model) resolveInventoryMouseClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+
+	if m.inventory.err != nil {
+		m.mode = gridMode
+		m.inventory.err = nil
+		return m, nil
+	}
+
+	if m.zones == nil {
+		return m, nil
+	}
+
+	visiblePtr, _ := m.inventory.State.GetList(core.ListVisible)
+	visible := *visiblePtr
+	inventoryPtr, _ := m.inventory.State.GetList(core.ListInventory)
+	inventory := *inventoryPtr
+
+	// Equipped grid (use index 0 for empty-list placeholder)
+	if len(visible) == 0 {
+		if m.zones.Get(inventoryItemZone(0, 0)).InBounds(msg) {
+			m.inventory.focusedList = 0
+			m.inventory.cursor = 0
+			return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeySpace})
+		}
+	} else {
+		for i := range visible {
+			if m.zones.Get(inventoryItemZone(0, i)).InBounds(msg) {
+				m.inventory.focusedList = 0
+				m.inventory.cursor = i
+				return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeySpace})
+			}
+		}
+	}
+
+	// Inventory grid (use index 0 for empty-list placeholder)
+	if len(inventory) == 0 {
+		if m.zones.Get(inventoryItemZone(1, 0)).InBounds(msg) {
+			m.inventory.focusedList = 1
+			m.inventory.cursor = 0
+			return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeySpace})
+		}
+	} else {
+		for i := range inventory {
+			if m.zones.Get(inventoryItemZone(1, i)).InBounds(msg) {
+				m.inventory.focusedList = 1
+				m.inventory.cursor = i
+				return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeySpace})
+			}
+		}
+	}
+
+	if m.zones.Get(inventoryListZone(2)).InBounds(msg) {
+		m.inventory.focusedList = 2
+		return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	if m.zones.Get(inventoryListZone(3)).InBounds(msg) {
+		m.inventory.focusedList = 3
+		return m.updateInventoryMode(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+
+	return m, nil
+}
+
 func (m Model) updateInventoryMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	inv := &m.inventory
 

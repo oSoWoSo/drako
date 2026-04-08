@@ -13,7 +13,7 @@ type CommandItem struct {
 type Command struct {
 	Name               string        `toml:"name"`
 	Command            string        `toml:"command"`
-	Row                int           `toml:"row"`
+	Row                int           `toml:"row"` // 1-based indexing (1-9), -1 for last row
 	Col                string        `toml:"col"`
 	Description        string        `toml:"description"`
 	AutoCloseExecution *bool         `toml:"auto_close_execution"`
@@ -23,43 +23,66 @@ type Command struct {
 
 // AppSettings represents the global configuration in config.toml
 type AppSettings struct {
-	DefaultShell       string      `toml:"default_shell"`
-	NumbModifier       string      `toml:"numb_modifier"`
-	Profile            string      `toml:"profile"`
-	LockTimeoutMinutes *int        `toml:"lock_timeout_minutes"`
-	AutoLockEnabled    *bool       `toml:"auto_lock_enabled"`
-	EnvWhitelist       []string    `toml:"env_whitelist"`
-	EnvBlocklist       []string    `toml:"env_blocklist"`
-	Theme              string      `toml:"theme"` // Global Fallback Theme
-	Keys               InputConfig `toml:"keys"`
+	DefaultShell           string      `toml:"default_shell"`
+	NumbModifier           string      `toml:"numb_modifier"`
+	Profile                string      `toml:"profile"`
+	WorkingDirectory       *string     `toml:"working_directory"`
+	LockTimeoutMinutes     *int        `toml:"lock_timeout_minutes"`
+	AutoLockEnabled        *bool       `toml:"auto_lock_enabled"`
+	GridSelectionTimeoutMs int         `toml:"grid_selection_timeout_ms"`
+	EnvWhitelist           []string    `toml:"env_whitelist"`
+	EnvBlocklist           []string    `toml:"env_blocklist"`
+	Theme                  string      `toml:"theme"` // Global Fallback Theme
+	Keys                   InputConfig `toml:"keys"`
+	HeaderCommandEnabled   bool        `toml:"header_command_enabled"`
+	HeaderCommand          string      `toml:"header_command"`
+	HeaderCommandArgs      []string    `toml:"header_command_args"`
+	HeaderCommandTimeout   int         `toml:"header_command_timeout"`
+	HeaderFallback         string      `toml:"header_fallback"`
+	HeaderCommandMaxLines  int         `toml:"header_command_max_lines"`
 }
 
 // Config represents the runtime application configuration (Settings + Active Profile)
 type Config struct {
-	Theme              string      `toml:"theme"`
-	HeaderArt          *string     `toml:"header_art"`
-	DefaultShell       string      `toml:"default_shell"`
-	NumbModifier       string      `toml:"numb_modifier"`
-	X                  int         `toml:"x"`
-	Y                  int         `toml:"y"`
-	Profile            string      `toml:"profile"`
-	LockTimeoutMinutes *int        `toml:"lock_timeout_minutes"`
-	AutoLockEnabled    *bool       `toml:"auto_lock_enabled"`
-	EnvWhitelist       []string    `toml:"env_whitelist"`
-	EnvBlocklist       []string    `toml:"env_blocklist"`
-	Keys               InputConfig `toml:"keys"`
-	Commands           []Command   `toml:"commands"`
+	Theme                  string      `toml:"theme"`
+	HeaderArt              *string     `toml:"header_art"`
+	HeaderCommandEnabled   bool        `toml:"header_command_enabled"`
+	HeaderCommand          string      `toml:"header_command"`
+	HeaderCommandArgs      []string    `toml:"header_command_args"`
+	HeaderCommandTimeout   int         `toml:"header_command_timeout"`
+	HeaderFallback         string      `toml:"header_fallback"`
+	HeaderCommandMaxLines  int         `toml:"header_command_max_lines"`
+	GridSelectionTimeoutMs int         `toml:"grid_selection_timeout_ms"`
+	DefaultShell           string      `toml:"default_shell"`
+	NumbModifier           string      `toml:"numb_modifier"`
+	X                      int         `toml:"x"`
+	Y                      int         `toml:"y"`
+	Profile                string      `toml:"profile"`
+	WorkingDirectory       *string     `toml:"working_directory"`
+	LockTimeoutMinutes     *int        `toml:"lock_timeout_minutes"`
+	AutoLockEnabled        *bool       `toml:"auto_lock_enabled"`
+	EnvWhitelist           []string    `toml:"env_whitelist"`
+	EnvBlocklist           []string    `toml:"env_blocklist"`
+	Keys                   InputConfig `toml:"keys"`
+	Commands               []Command   `toml:"commands"`
 }
 
 // ProfileFile represents the content of a profile file (e.g. core.profile.toml)
 type ProfileFile struct {
-	X         int       `toml:"x"`
-	Y         int       `toml:"y"`
-	Theme     string    `toml:"theme"`
-	HeaderArt *string   `toml:"header_art"`
-	Shell     *string   `toml:"shell"`
-	Assets    *[]string `toml:"assets"`
-	Commands  []Command `toml:"commands"`
+	X                    int       `toml:"x"`
+	Y                    int       `toml:"y"`
+	Theme                string    `toml:"theme"`
+	Icon                 string    `toml:"icon"`
+	HeaderArt            *string   `toml:"header_art"`
+	Shell                *string   `toml:"shell"`
+	Assets               *[]string `toml:"assets"`
+	WorkingDirectory     *string   `toml:"working_directory"`
+	Commands             []Command `toml:"commands"`
+	HeaderCommandEnabled *bool     `toml:"header_command_enabled"`
+	HeaderCommand        *string   `toml:"header_command"`
+	HeaderCommandArgs    []string  `toml:"header_command_args"`
+	HeaderCommandTimeout *int      `toml:"header_command_timeout"`
+	HeaderFallback       *string   `toml:"header_fallback"`
 }
 
 // ProfileInfo holds metadata and content of a profile

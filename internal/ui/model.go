@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	zone "github.com/lrstanley/bubblezone"
 	"github.com/lucky7xz/drako/internal/config"
 )
 
@@ -78,6 +80,15 @@ type Model struct {
 	lockLastDirection int
 
 	acknowledgedErrors map[string]bool
+
+	lastClickTime  time.Time
+	lastClickPos   struct{ x, y int }
+
+	swipeActive bool
+	swipeStartX int
+	swipeStartY int
+
+	zones *zone.Manager
 }
 
 func (m *Model) applyConfig(cfg config.Config) {
@@ -260,8 +271,27 @@ func InitialModel(glassrootMode bool) Model {
 		lockPumpGoal:       defaultLockPumpGoal,
 		acknowledgedErrors: make(map[string]bool),
 		GlassrootMode:      glassrootMode,
+		zones:              zone.New(),
 	}
 	m.applyBundle(bundle)
+
+	// Apply initial working directory if set
+	if m.Config.WorkingDirectory != nil && strings.TrimSpace(*m.Config.WorkingDirectory) != "" {
+		targetDir := *m.Config.WorkingDirectory
+		// Expand user home directory if needed
+		if strings.HasPrefix(targetDir, "~") {
+			home, err := os.UserHomeDir()
+			if err == nil {
+				targetDir = filepath.Join(home, strings.TrimPrefix(targetDir, "~"))
+			}
+		}
+		if err := os.Chdir(targetDir); err != nil {
+			log.Printf("warning: could not change to initial working directory %s: %v", targetDir, err)
+		} else {
+			log.Printf("set initial working directory to: %s", targetDir)
+		}
+	}
+
 	if len(bundle.Broken) > 0 {
 		m.pendingProfileErrors = append(m.pendingProfileErrors, bundle.Broken...)
 		m.profileErrorQueueActive = true
